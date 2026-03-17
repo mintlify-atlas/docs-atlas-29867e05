@@ -1,0 +1,153 @@
+---
+title: "Multi-level hierarchies"
+description: "Build complex agent pipelines by nesting supervisors inside supervisors."
+---
+
+A multi-level hierarchy is a supervisor that manages other supervisors instead of (or in addition to) managing individual agents directly. This lets you organize large workflows into clearly separated teams, each with their own sub-supervisor, while a top-level supervisor coordinates across them.
+
+## When to use this pattern
+
+<CardGroup cols={2}>
+  <Card title="Clear team divisions" icon="users">
+    When your workflow has distinct functional domains — such as research, writing, or data processing — that can operate semi-independently.
+  </Card>
+  <Card title="Scalable coordination" icon="sitemap">
+    When a flat list of agents becomes too large for one supervisor to manage effectively, splitting into sub-teams reduces cognitive load on each supervisor.
+  </Card>
+</CardGroup>
+
+## How it works
+
+Because `create_supervisor()` returns a `StateGraph`, you call `.compile()` on it just as you would for any other LangGraph graph. The compiled result is a `CompiledStateGraph` — which is itself a valid agent that can be passed to another `create_supervisor()` call.
+
+Two things are required when embedding a supervisor as a sub-agent:
+
+1. **`.compile(name="...")`** — The `name` argument gives the compiled sub-supervisor a unique identifier so the top-level supervisor can reference it as a handoff destination.
+2. **`supervisor_name`** — Pass a distinct `supervisor_name` to each `create_supervisor()` call so that internal supervisor nodes do not collide.
+
+## Building a two-level hierarchy
+
+<Steps>
+  <Step title="Create the leaf agents">
+    Define the specialized agents that will do the actual work. Each agent needs a unique `name`.
+
+    ```python
+    from langchain_openai import ChatOpenAI
+    from langgraph.prebuilt import create_react_agent
+
+    model = ChatOpenAI(model="gpt-4o")
+
+    # Research team agents
+    research_agent = create_react_agent(
+        model=model,
+        tools=[web_search],
+        name="research_expert",
+    )
+
+    math_agent = create_react_agent(
+        model=model,
+        tools=[add, multiply],
+        name="math_expert",
+    )
+
+    # Writing team agents
+    writing_agent = create_react_agent(
+        model=model,
+        tools=[write_document],
+        name="writing_expert",
+    )
+
+    publishing_agent = create_react_agent(
+        model=model,
+        tools=[publish_document],
+        name="publishing_expert",
+    )
+    ```
+  </Step>
+
+  <Step title="Create and compile each sub-team">
+    Wrap the leaf agents in their own supervisor, then compile with a `name`. The `supervisor_name` parameter names the internal supervisor node inside that sub-graph.
+
+    ```python
+    from langgraph_supervisor import create_supervisor
+
+    research_team = create_supervisor(
+        [research_agent, math_agent],
+        model=model,
+        supervisor_name="research_supervisor"
+    ).compile(name="research_team")
+
+    writing_team = create_supervisor(
+        [writing_agent, publishing_agent],
+        model=model,
+        supervisor_name="writing_supervisor"
+    ).compile(name="writing_team")
+    ```
+
+    <Note>
+      The `name` passed to `.compile()` is what the top-level supervisor uses as the handoff destination. The `supervisor_name` is the name of the node inside the compiled graph. They serve different purposes and should each be unique across the entire hierarchy.
+    </Note>
+  </Step>
+
+  <Step title="Create the top-level supervisor">
+    Pass the compiled sub-supervisors to a new `create_supervisor()` call exactly as you would pass individual agents.
+
+    ```python
+    top_level_supervisor = create_supervisor(
+        [research_team, writing_team],
+        model=model,
+        supervisor_name="top_level_supervisor"
+    ).compile(name="top_level_supervisor")
+    ```
+  </Step>
+
+  <Step title="Run the workflow">
+    Invoke the top-level supervisor as you would any compiled LangGraph graph.
+
+    ```python
+    result = top_level_supervisor.invoke({
+        "messages": [
+            {
+                "role": "user",
+                "content": "Research the latest AI trends and write a short report."
+            }
+        ]
+    })
+    ```
+  </Step>
+</Steps>
+
+## Complete example
+
+This is the full multi-level hierarchy pattern taken directly from the library:
+
+```python
+research_team = create_supervisor(
+    [research_agent, math_agent],
+    model=model,
+    supervisor_name="research_supervisor"
+).compile(name="research_team")
+
+writing_team = create_supervisor(
+    [writing_agent, publishing_agent],
+    model=model,
+    supervisor_name="writing_supervisor"
+).compile(name="writing_team")
+
+top_level_supervisor = create_supervisor(
+    [research_team, writing_team],
+    model=model,
+    supervisor_name="top_level_supervisor"
+).compile(name="top_level_supervisor")
+```
+
+<Tip>
+  You can nest as many levels as needed. Each compiled supervisor is just a `Pregel` object, so it can always be wrapped by another supervisor.
+</Tip>
+
+## Key parameters
+
+| Parameter | Where it's set | Purpose |
+|---|---|---|
+| `supervisor_name` | `create_supervisor(supervisor_name=...)` | Names the supervisor node inside the graph. Must be unique per level. |
+| `name` | `.compile(name=...)` | Names the compiled graph so it can be used as a handoff destination. |

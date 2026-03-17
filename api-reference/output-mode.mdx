@@ -1,0 +1,95 @@
+---
+title: "OutputMode"
+description: "Control how sub-agent message histories are included in the supervisor's conversation state."
+---
+
+```python
+OutputMode = Literal["full_history", "last_message"]
+```
+
+`OutputMode` controls what portion of a sub-agent's message history is appended to the shared conversation state after the sub-agent finishes its work. Pass one of the values below to the `output_mode` parameter of [`create_supervisor`](/api-reference/create-supervisor).
+
+## Values
+
+### `"last_message"` (default)
+
+Only the final message from the sub-agent is added to the supervisor's message history.
+
+If the last message is a `ToolMessage`, both the preceding `AIMessage` and the `ToolMessage` are included (a pair is needed to maintain a valid message history).
+
+**Use when:** you want a concise message history and the intermediate reasoning steps of the sub-agent are not relevant to the supervisor.
+
+### `"full_history"`
+
+The entire message history produced by the sub-agent is added to the supervisor's message history.
+
+**Use when:** the supervisor needs full visibility into how the sub-agent reached its answer — for example, when intermediate tool calls contain information the supervisor should reason about.
+
+## Comparison
+
+| | `"last_message"` | `"full_history"` |
+| --- | --- | --- |
+| Messages added | 1 (or 2 if last is a `ToolMessage`) | All messages from sub-agent turn |
+| Token usage | Lower | Higher |
+| Supervisor visibility | Final answer only | Full reasoning trace |
+| Typical use case | Simple delegation | Complex multi-step reasoning |
+
+## Examples
+
+### Using `last_message`
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+
+
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+
+math_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[add],
+    name="math_expert",
+)
+
+# Only the math agent's final answer is visible to the supervisor
+workflow = create_supervisor(
+    [math_agent],
+    model=ChatOpenAI(model="gpt-4o"),
+    output_mode="last_message",
+)
+
+app = workflow.compile()
+```
+
+### Using `full_history`
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+
+
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return "Here are the headcounts for each of the FAANG companies in 2024..."
+
+
+research_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[web_search],
+    name="research_expert",
+)
+
+# The supervisor sees every tool call and intermediate message from the research agent
+workflow = create_supervisor(
+    [research_agent],
+    model=ChatOpenAI(model="gpt-4o"),
+    output_mode="full_history",
+)
+
+app = workflow.compile()
+```

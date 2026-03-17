@@ -1,0 +1,146 @@
+---
+title: "Agent name utilities"
+description: "Utilities for exposing agent names in message content for LLMs that don't support native name fields."
+---
+
+When multiple sub-agents contribute messages to a shared conversation history, the supervisor LLM needs to know which agent produced which message. OpenAI models read the `name` field on `AIMessage` natively. For all other providers you can use these utilities to embed agent names directly in the message content using XML tags.
+
+## AgentNameMode
+
+```python
+AgentNameMode = Literal["inline"]
+```
+
+A type alias controlling how agent names are exposed to the supervisor LLM.
+
+| Value | Behaviour |
+| --- | --- |
+| `"inline"` | Wraps message content in `<name>agent_name</name><content>...</content>` XML tags so any LLM can identify the source agent from the text itself. |
+
+Pass this value to the `include_agent_name` parameter of [`create_supervisor`](/api-reference/create-supervisor).
+
+## with_agent_name
+
+```python
+def with_agent_name(
+    model: LanguageModelLike,
+    agent_name_mode: AgentNameMode,
+) -> LanguageModelLike
+```
+
+Wraps a language model so that agent names are added to messages on the way in and stripped from the model's own output on the way out.
+
+This is the function `create_supervisor` calls internally when you set `include_agent_name="inline"`. You can also use it directly if you are wiring up a custom supervisor.
+
+<Note>
+  Agent names are read from `message.name`. If you use `create_react_agent`, the `name` field is set automatically. For custom agents, set `name` on every `AIMessage` your agent returns.
+</Note>
+
+### Parameters
+
+<ParamField path="model" type="LanguageModelLike" required>
+  The language model to wrap.
+</ParamField>
+
+<ParamField path="agent_name_mode" type="AgentNameMode" required>
+  The formatting mode. Currently the only accepted value is `"inline"`.
+</ParamField>
+
+### Returns
+
+A `LanguageModelLike` chain that:
+1. Calls `add_inline_agent_name` on every message in the input before forwarding to the model.
+2. Calls `remove_inline_agent_name` on the model's output before returning.
+
+## add_inline_agent_name
+
+```python
+def add_inline_agent_name(message: BaseMessage) -> BaseMessage
+```
+
+Adds `<name>` and `<content>` XML tags to an `AIMessage`'s content field.
+
+Non-`AIMessage` types and messages without a `name` are returned unchanged.
+
+### Examples
+
+```python
+from langchain_core.messages import AIMessage
+from langgraph_supervisor.agent_name import add_inline_agent_name
+
+# String content
+add_inline_agent_name(AIMessage(content="Hello", name="assistant"))
+# AIMessage(content="<name>assistant</name><content>Hello</content>", name="assistant")
+
+# Content-block content (e.g. Anthropic multi-modal messages)
+add_inline_agent_name(
+    AIMessage(content=[{"type": "text", "text": "Hello"}], name="assistant")
+)
+# AIMessage(
+#     content=[{"type": "text", "text": "<name>assistant</name><content>Hello</content>"}],
+#     name="assistant",
+# )
+```
+
+## remove_inline_agent_name
+
+```python
+def remove_inline_agent_name(message: BaseMessage) -> BaseMessage
+```
+
+Strips the `<name>` and `<content>` XML tags added by `add_inline_agent_name`, restoring the original message content.
+
+Messages that do not contain the expected tags, non-`AIMessage` types, and messages with empty content are returned unchanged.
+
+### Examples
+
+```python
+from langchain_core.messages import AIMessage
+from langgraph_supervisor.agent_name import remove_inline_agent_name
+
+# String content
+remove_inline_agent_name(
+    AIMessage(
+        content="<name>assistant</name><content>Hello</content>",
+        name="assistant",
+    )
+)
+# AIMessage(content="Hello", name="assistant")
+
+# Content-block content
+remove_inline_agent_name(
+    AIMessage(
+        content=[{"type": "text", "text": "<name>assistant</name><content>Hello</content>"}],
+        name="assistant",
+    )
+)
+# AIMessage(content=[{"type": "text", "text": "Hello"}], name="assistant")
+```
+
+## Usage with create_supervisor
+
+Pass `include_agent_name="inline"` to enable inline agent names for all models that do not support native name fields:
+
+```python
+from langchain_anthropic import ChatAnthropic
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+
+
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+
+math_agent = create_react_agent(
+    model="anthropic:claude-3-5-sonnet-latest",
+    tools=[add],
+    name="math_expert",
+)
+
+workflow = create_supervisor(
+    [math_agent],
+    model=ChatAnthropic(model="claude-3-5-sonnet-latest"),
+    include_agent_name="inline",
+)
+```

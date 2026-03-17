@@ -1,0 +1,94 @@
+---
+title: "Message forwarding"
+description: "Forward worker agent responses directly to output without paraphrasing using the forward_message tool."
+---
+
+By default, once a worker agent finishes its task and returns control to the supervisor, the supervisor synthesizes a response and sends it back to the user. This introduces two potential issues:
+
+- **Information loss** — The supervisor may paraphrase or omit details from the worker's response.
+- **Token cost** — The supervisor spends tokens re-generating content that was already produced.
+
+`create_forward_message_tool` solves this by giving the supervisor a tool it can invoke to forward a worker's last message verbatim to the output, skipping any reformulation.
+
+## How it works
+
+The tool is named `forward_message` and takes a single user-visible argument: `from_agent` — the name of the agent whose latest `AIMessage` should be forwarded.
+
+Internally it:
+1. Walks the message history in reverse to find the most recent `AIMessage` with a `name` matching `from_agent` (case-insensitive), skipping handoff-back messages.
+2. Creates a new `AIMessage` with the same content but with the supervisor's name attached.
+3. Returns a `Command` that writes that message to the parent graph state and ends the turn.
+
+If no matching message is found, the tool returns an error string listing the agent names it did find, so the supervisor can recover.
+
+## Adding the tool to your supervisor
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+from langgraph_supervisor.handoff import create_forward_message_tool
+
+model = ChatOpenAI(model="gpt-4o")
+
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return "Here are the headcounts for each of the FAANG companies in 2024..."
+
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+research_agent = create_react_agent(
+    model=model,
+    tools=[web_search],
+    name="research_expert",
+)
+
+math_agent = create_react_agent(
+    model=model,
+    tools=[add],
+    name="math_expert",
+)
+
+# The argument is the name that will be stamped on the forwarded message
+forwarding_tool = create_forward_message_tool("supervisor")
+
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=model,
+    # Pass the forwarding tool alongside any other tools
+    tools=[forwarding_tool],
+)
+
+app = workflow.compile()
+```
+
+The supervisor can now call `forward_message(from_agent="research_expert")` to relay the researcher's response directly without rewriting it.
+
+<Note>
+  `create_forward_message_tool` accepts a `supervisor_name` argument (default `"supervisor"`). This value is set as the `name` field on the forwarded `AIMessage`. Pass the same value you used for the `supervisor_name` parameter in `create_supervisor` to keep naming consistent.
+</Note>
+
+## The `supervisor_name` argument
+
+```python
+create_forward_message_tool(supervisor_name="supervisor")
+```
+
+`supervisor_name` is used as the `name` attribute on the new `AIMessage` that is inserted into the graph state. It should match the `supervisor_name` you passed to `create_supervisor()` so that downstream consumers of the message history can correctly attribute the message.
+
+## When to use message forwarding
+
+<CardGroup cols={2}>
+  <Card title="High-fidelity responses" icon="shield-check">
+    When the worker's answer must reach the user exactly as produced — such as code snippets, structured data, or precise numerical results.
+  </Card>
+  <Card title="Token efficiency" icon="bolt">
+    When the supervisor would otherwise just repeat what the worker said, forwarding avoids spending tokens on a redundant paraphrase.
+  </Card>
+</CardGroup>
+
+<Tip>
+  You can combine `create_forward_message_tool` with custom handoff tools in the same `tools` list. The supervisor will decide at runtime whether to forward or synthesize based on context.
+</Tip>

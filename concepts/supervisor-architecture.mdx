@@ -1,0 +1,167 @@
+---
+title: "Supervisor architecture"
+description: "Understand how the supervisor pattern coordinates multiple specialized agents in a LangGraph workflow."
+---
+
+The supervisor pattern is a hierarchical multi-agent architecture where a central **supervisor agent** orchestrates a set of specialized sub-agents. The supervisor controls all communication flow and task delegation, deciding which agent to invoke based on the current context and the user's request.
+
+## What is a supervisor?
+
+A supervisor sits at the top of the agent hierarchy. Rather than handling every task itself, it routes work to purpose-built sub-agents — each with its own tools, prompts, and expertise — and then collects their results to form a coherent final response.
+
+This separation of concerns keeps individual agents focused and maintainable, while the supervisor acts as the coordination layer.
+
+<Info>
+  LangGraph Supervisor is built on top of [LangGraph](https://github.com/langchain-ai/langgraph) and inherits first-class support for streaming, short-term and long-term memory, and human-in-the-loop workflows.
+</Info>
+
+## The `create_supervisor` function
+
+`create_supervisor` is the primary entry point for building a supervisor workflow. It accepts a list of compiled sub-agents and a language model, and returns a `StateGraph` that must be compiled before use.
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph_supervisor import create_supervisor
+from langgraph.prebuilt import create_react_agent
+
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return 'Here are the headcounts for each of the FAANG companies in 2024...'
+
+math_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[add],
+    name="math_expert",
+)
+
+research_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[web_search],
+    name="research_expert",
+)
+
+# Returns a StateGraph — must be compiled before use
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=ChatOpenAI(model="gpt-4o"),
+)
+
+app = workflow.compile()
+```
+
+<Warning>
+  Every sub-agent passed to `create_supervisor` must have a unique, explicit name. Agents created with `create_react_agent(..., name=agent_name)` satisfy this requirement. Passing an agent without a name (or with the default `"LangGraph"` name) will raise a `ValueError`.
+</Warning>
+
+## The `StateGraph` under the hood
+
+`create_supervisor` assembles and returns a `StateGraph`. The graph's state is defined by the `_OuterState` TypedDict:
+
+```python
+from typing import Sequence
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
+from typing_extensions import Annotated, TypedDict
+
+class _OuterState(TypedDict):
+    """The state of the supervisor workflow."""
+    messages: Annotated[Sequence[AnyMessage], add_messages]
+```
+
+The `add_messages` reducer means that new messages are appended to the existing list rather than replacing it, preserving the full conversation history across agent turns.
+
+You can provide a custom `state_schema` to `create_supervisor` if your workflow requires additional state keys beyond `messages`.
+
+## Execution flow
+
+When you invoke the compiled app, execution follows this sequence:
+
+<Steps>
+  <Step title="User input arrives">
+    The user's message is placed in `state["messages"]` and the graph starts at the supervisor node.
+  </Step>
+  <Step title="Supervisor decides">
+    The supervisor LLM examines the message history and selects one or more handoff tools that correspond to the appropriate sub-agent(s).
+  </Step>
+  <Step title="Handoff tool executes">
+    LangGraph's `ToolNode` runs the handoff tool, which returns a `Command` object directing the graph to route to the named sub-agent node.
+  </Step>
+  <Step title="Sub-agent runs">
+    The sub-agent processes the state independently and produces a response.
+  </Step>
+  <Step title="Control returns to supervisor">
+    The sub-agent's output is merged back into `state["messages"]` (according to the configured `output_mode`), and execution returns to the supervisor node.
+  </Step>
+  <Step title="Final output">
+    When the supervisor determines no further delegation is needed, it routes to `END` and the final `state["messages"]` is returned to the caller.
+  </Step>
+</Steps>
+
+## Relationship to `create_react_agent`
+
+Internally, `create_supervisor` creates the supervisor itself using `create_react_agent`, giving it the handoff tools (and any additional tools you supply) as its tool set. This means the supervisor node behaves exactly like a standard ReAct agent — it just happens that its tools are the handoff mechanisms that delegate to other agents.
+
+Each sub-agent is also typically created with `create_react_agent`, though any LangGraph `Pregel`-compatible object (including functional API workflows and `RemoteGraph` instances) is supported.
+
+## The `supervisor_name` parameter
+
+The `supervisor_name` parameter sets the name of the supervisor node within the graph. It defaults to `"supervisor"`.
+
+```python
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=ChatOpenAI(model="gpt-4o"),
+    supervisor_name="supervisor",  # default
+)
+```
+
+This name is used in several places:
+
+- As the node name within the `StateGraph`
+- As the `name` argument passed to the underlying `create_react_agent` call
+- As the `supervisor_name` argument to `create_handoff_back_messages` when generating handoff-back messages
+
+When building multi-level hierarchies, give each supervisor a distinct name so that handoff-back messages correctly identify which supervisor to return control to:
+
+```python
+research_team = create_supervisor(
+    [research_agent, math_agent],
+    model=model,
+    supervisor_name="research_supervisor"
+).compile(name="research_team")
+
+writing_team = create_supervisor(
+    [writing_agent, publishing_agent],
+    model=model,
+    supervisor_name="writing_supervisor"
+).compile(name="writing_team")
+
+top_level_supervisor = create_supervisor(
+    [research_team, writing_team],
+    model=model,
+    supervisor_name="top_level_supervisor"
+).compile(name="top_level_supervisor")
+```
+
+## Adding memory
+
+Because `create_supervisor` returns an uncompiled `StateGraph`, you can pass a checkpointer or store directly to `.compile()`:
+
+```python
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
+
+checkpointer = InMemorySaver()
+store = InMemoryStore()
+
+app = workflow.compile(
+    checkpointer=checkpointer,
+    store=store
+)
+```
+
+This enables short-term (within-thread) and long-term (cross-thread) memory without any changes to the supervisor logic itself.

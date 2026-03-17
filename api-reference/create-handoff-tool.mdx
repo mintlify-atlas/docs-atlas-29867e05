@@ -1,0 +1,108 @@
+---
+title: "create_handoff_tool"
+description: "Create a handoff tool that transfers control from the supervisor to a specified agent."
+---
+
+Creates a LangGraph tool that the supervisor can call to transfer control to a named sub-agent. `create_supervisor` generates these tools automatically, but you can use this function directly when you need custom tool names, descriptions, or behaviour.
+
+## Signature
+
+```python
+def create_handoff_tool(
+    *,
+    agent_name: str,
+    name: str | None = None,
+    description: str | None = None,
+    add_handoff_messages: bool = True,
+) -> BaseTool
+```
+
+## Parameters
+
+<ParamField path="agent_name" type="str" required>
+  The name of the target agent — the name of the corresponding node in the multi-agent graph.
+
+  Agent names should be simple, clear, and unique, preferably in `snake_case`. The name must be accepted as a LangGraph node name and as a tool name by your LLM provider.
+</ParamField>
+
+<ParamField path="name" type="str | None" default="None">
+  An optional custom name for the handoff tool.
+
+  When not provided, the tool is named `transfer_to_<agent_name>` (with the agent name lowercased and spaces replaced by underscores).
+</ParamField>
+
+<ParamField path="description" type="str | None" default="None">
+  An optional description shown to the supervisor LLM when it decides which tool to call.
+
+  When not provided, the description defaults to `Ask agent '<agent_name>' for help`.
+</ParamField>
+
+<ParamField path="add_handoff_messages" type="bool" default="True">
+  Whether to append a pair of `(AIMessage, ToolMessage)` to the message history when the handoff occurs.
+
+  Set to `False` to omit these messages and keep the history leaner.
+</ParamField>
+
+## Returns
+
+<ResponseField name="BaseTool" type="BaseTool">
+  A LangChain `BaseTool` that, when called by the supervisor LLM, issues a LangGraph `Command` to route execution to the named sub-agent.
+
+  The tool carries `metadata` with the key `__handoff_destination` set to `agent_name`, which is how `create_supervisor` identifies handoff tools and validates full coverage of sub-agents.
+</ResponseField>
+
+## Example
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+from langgraph_supervisor.handoff import create_handoff_tool
+
+
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return "Here are the headcounts for each of the FAANG companies in 2024..."
+
+
+math_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[add],
+    name="math_expert",
+)
+
+research_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[web_search],
+    name="research_expert",
+)
+
+# Create custom handoff tools with explicit names and descriptions
+handoff_to_math = create_handoff_tool(
+    agent_name="math_expert",
+    name="delegate_to_math_expert",
+    description="Send a math problem to the math expert agent.",
+)
+handoff_to_research = create_handoff_tool(
+    agent_name="research_expert",
+    name="delegate_to_research_expert",
+    description="Ask the research expert to look up information on the web.",
+)
+
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=ChatOpenAI(model="gpt-4o"),
+    tools=[handoff_to_math, handoff_to_research],
+)
+
+app = workflow.compile()
+```
+
+<Note>
+  When you supply custom handoff tools via the `tools` parameter of `create_supervisor`, you must provide one handoff tool for **every** sub-agent. Partial coverage raises a `ValueError`.
+</Note>

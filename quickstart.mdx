@@ -1,80 +1,172 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Build your first multi-agent supervisor in under 5 minutes."
 ---
 
-## Get started in three steps
+This guide walks you through creating a supervisor that coordinates two specialized agents — a math expert and a research expert — to answer a question that requires both capabilities.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  LangGraph Supervisor requires **Python >= 3.10**.
+</Note>
 
-### Step 1: Set up your local environment
+<Steps>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Step title="Install the packages">
 
-### Step 2: Deploy your changes
+Install `langgraph-supervisor` and the OpenAI integration for LangChain:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<CodeGroup>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```bash pip
+pip install langgraph-supervisor langchain-openai
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash uv
+uv add langgraph-supervisor langchain-openai
+```
 
-### Step 3: Go live
+</CodeGroup>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+</Step>
+
+<Step title="Set your API key">
+
+Export your OpenAI API key as an environment variable:
+
+```bash
+export OPENAI_API_KEY=<your_api_key>
+```
+
+<Tip>
+  For debugging and tracing your agents during development, set up [LangSmith](https://docs.langchain.com/langsmith/home) by exporting `LANGCHAIN_API_KEY` and `LANGCHAIN_TRACING_V2=true`.
+</Tip>
+
+</Step>
+
+<Step title="Create the specialized agents">
+
+Define tool functions and use `create_react_agent` from LangGraph to create two agents — one for math and one for research. Each agent must be given a unique `name`.
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+model = ChatOpenAI(model="gpt-4o")
+
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+def multiply(a: float, b: float) -> float:
+    """Multiply two numbers."""
+    return a * b
+
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return (
+        "Here are the headcounts for each of the FAANG companies in 2024:\n"
+        "1. **Facebook (Meta)**: 67,317 employees.\n"
+        "2. **Apple**: 164,000 employees.\n"
+        "3. **Amazon**: 1,551,000 employees.\n"
+        "4. **Netflix**: 14,000 employees.\n"
+        "5. **Google (Alphabet)**: 181,269 employees."
+    )
+
+math_agent = create_react_agent(
+    model=model,
+    tools=[add, multiply],
+    name="math_expert",
+    prompt="You are a math expert. Always use one tool at a time."
+)
+
+research_agent = create_react_agent(
+    model=model,
+    tools=[web_search],
+    name="research_expert",
+    prompt="You are a world class researcher with access to web search. Do not do any math."
+)
+```
+
+</Step>
+
+<Step title="Create the supervisor">
+
+Pass the agents to `create_supervisor` along with a model and an optional prompt that tells the supervisor how to delegate tasks:
+
+```python
+from langgraph_supervisor import create_supervisor
+
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=model,
+    prompt=(
+        "You are a team supervisor managing a research expert and a math expert. "
+        "For current events, use research_agent. "
+        "For math problems, use math_agent."
+    )
+)
+```
+
+`create_supervisor` returns a `StateGraph`. You must compile it before invoking.
+
+</Step>
+
+<Step title="Compile and invoke">
+
+Compile the workflow and invoke it with a user message:
+
+```python
+app = workflow.compile()
+
+result = app.invoke({
+    "messages": [
+        {
+            "role": "user",
+            "content": "what's the combined headcount of the FAANG companies in 2024?"
+        }
+    ]
+})
+```
+
+To print each message in the result:
+
+```python
+for m in result["messages"]:
+    m.pretty_print()
+```
+
+</Step>
+
+</Steps>
+
+## What happens at runtime
+
+When you invoke the workflow, the supervisor:
+
+1. Receives the user message.
+2. Calls `transfer_to_research_expert` to delegate the lookup task.
+3. The research agent runs `web_search` and returns the headcount data.
+4. Control returns to the supervisor, which then calls `transfer_to_math_expert` to sum the numbers.
+5. The math agent runs `add` and `multiply` as needed and returns the result.
+6. The supervisor assembles and returns the final response.
+
+<Tip>
+  By default, `create_supervisor` uses `output_mode="last_message"`, which adds only the final message from each agent to the shared conversation history. Set `output_mode="full_history"` if you want the complete message trace from each agent included.
+</Tip>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="API reference" icon="code" href="/api-reference/create-supervisor">
+    Explore all parameters for `create_supervisor`.
+  </Card>
+  <Card title="Custom handoff tools" icon="wrench" href="/guides/custom-handoff-tools">
+    Customize handoff tool names, descriptions, and behavior.
+  </Card>
+  <Card title="Message history" icon="messages" href="/concepts/message-history">
+    Control how agent outputs are added to the conversation history.
+  </Card>
+  <Card title="Multi-level hierarchies" icon="sitemap" href="/guides/multi-level-hierarchies">
+    Nest supervisors inside supervisors for complex pipelines.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

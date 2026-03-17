@@ -1,0 +1,70 @@
+---
+title: "create_forward_message_tool"
+description: "Create a tool that forwards worker agent messages directly to output without modification."
+---
+
+Creates a `forward_message` tool that the supervisor can call to relay a sub-agent's latest message to the user verbatim, bypassing the supervisor's own rephrasing. This preserves information fidelity and can reduce token usage.
+
+## Signature
+
+```python
+def create_forward_message_tool(supervisor_name: str = "supervisor") -> BaseTool
+```
+
+## Parameters
+
+<ParamField path="supervisor_name" type="str" default="supervisor">
+  The name of the supervisor node. Used to attribute the forwarded message correctly in the graph state — the forwarded `AIMessage` will carry this name.
+
+  This value should match the `supervisor_name` you pass to `create_supervisor`.
+</ParamField>
+
+## Returns
+
+<ResponseField name="BaseTool" type="BaseTool">
+  A LangChain `BaseTool` named `forward_message`.
+
+  When called, the tool:
+  1. Searches the message history in reverse for the most recent `AIMessage` whose `name` matches the `from_agent` argument (case-insensitive).
+  2. Emits a new `AIMessage` with the same content, attributed to the supervisor, via a LangGraph `Command` targeting the parent graph.
+  3. Returns an error string if no matching message is found, listing the agent names that were found.
+
+  The tool description shown to the supervisor LLM is:
+  > Forwards the latest message from the specified agent to the user without any changes. Use this to preserve information fidelity, avoid misinterpretation of questions or responses, and save time.
+</ResponseField>
+
+## Example
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+from langgraph_supervisor.handoff import create_forward_message_tool
+
+
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return "Here are the headcounts for each of the FAANG companies in 2024..."
+
+
+research_agent = create_react_agent(
+    model="openai:gpt-4o",
+    tools=[web_search],
+    name="research_expert",
+)
+
+forward_message_tool = create_forward_message_tool(supervisor_name="supervisor")
+
+workflow = create_supervisor(
+    [research_agent],
+    model=ChatOpenAI(model="gpt-4o"),
+    tools=[forward_message_tool],
+    supervisor_name="supervisor",
+)
+
+app = workflow.compile()
+```
+
+<Tip>
+  Use `create_forward_message_tool` when a sub-agent produces precise output (such as a structured report or exact figures) that the supervisor should not paraphrase. It avoids token-wasting reformulation and prevents accidental information loss.
+</Tip>

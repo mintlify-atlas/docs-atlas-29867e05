@@ -1,0 +1,107 @@
+---
+title: "Adding memory"
+description: "Attach checkpointers and stores to your supervisor workflow for persistent conversations."
+---
+
+`create_supervisor()` returns a `StateGraph` — it must be compiled before it can be invoked. This gives you a natural place to attach memory: pass a `checkpointer` or `store` directly to `.compile()`.
+
+LangGraph supports two complementary types of memory:
+
+<CardGroup cols={2}>
+  <Card title="Short-term memory" icon="clock">
+    A **checkpointer** persists the graph state between invocations within the same thread. Messages are remembered across turns of the same conversation.
+  </Card>
+  <Card title="Long-term memory" icon="database">
+    A **store** persists data across different threads. Useful for user preferences, facts, or summaries that should survive beyond a single session.
+  </Card>
+</CardGroup>
+
+## Adding a checkpointer
+
+A checkpointer enables short-term (within-thread) memory. Pass a `BaseCheckpointSaver` instance to `.compile(checkpointer=...)`.
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+
+checkpointer = InMemorySaver()
+
+model = ChatOpenAI(model="gpt-4o")
+research_agent = create_react_agent(model=model, tools=[web_search], name="research_expert")
+math_agent = create_react_agent(model=model, tools=[add, multiply], name="math_expert")
+
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=model,
+    prompt="You are a team supervisor managing a research expert and a math expert.",
+)
+
+app = workflow.compile(checkpointer=checkpointer)
+```
+
+When using a checkpointer, every invocation must include a `thread_id` in the config so LangGraph knows which checkpoint to read from and write to:
+
+```python
+config = {"configurable": {"thread_id": "conversation-1"}}
+
+# First turn
+result = app.invoke(
+    {"messages": [{"role": "user", "content": "What is 3 plus 5?"}]},
+    config=config,
+)
+
+# Second turn — the graph remembers the previous exchange
+result = app.invoke(
+    {"messages": [{"role": "user", "content": "Now multiply that by 10."}]},
+    config=config,
+)
+```
+
+<Note>
+  `InMemorySaver` stores checkpoints in memory and is suitable for development and testing. For production, use a persistent backend such as `PostgresSaver` or `SqliteSaver`.
+</Note>
+
+## Adding a store
+
+A store enables long-term (cross-thread) memory. Pass a `BaseStore` instance to `.compile(store=...)`.
+
+```python
+from langgraph.store.memory import InMemoryStore
+
+store = InMemoryStore()
+
+app = workflow.compile(store=store)
+```
+
+## Combining both
+
+You can attach a checkpointer and a store at the same time:
+
+```python
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
+
+checkpointer = InMemorySaver()
+store = InMemoryStore()
+
+workflow = create_supervisor(
+    [research_agent, math_agent],
+    model=model,
+    prompt="You are a team supervisor managing a research expert and a math expert.",
+)
+
+app = workflow.compile(
+    checkpointer=checkpointer,
+    store=store
+)
+```
+
+## Further reading
+
+For a deeper look at how LangGraph handles persistence, see the official LangGraph documentation:
+
+- [Short-term memory (persistence)](https://langchain-ai.github.io/langgraph/how-tos/persistence/)
+- [Long-term memory (cross-thread persistence)](https://langchain-ai.github.io/langgraph/how-tos/cross-thread-persistence/)
+- [Memory concepts](https://langchain-ai.github.io/langgraph/concepts/memory/)
