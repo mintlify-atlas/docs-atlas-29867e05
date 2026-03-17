@@ -1,0 +1,87 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "LangGraph Supervisor",
+  "projectDescription": "A Python library for building hierarchical multi-agent systems where specialized agents are orchestrated by a central supervisor agent using LangGraph.",
+  "theme": "mint",
+  "primaryColor": "#060814",
+  "lightColor": "#7ccafa",
+  "darkColor": "#3c5c7c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/supervisor-architecture",
+              "concepts/message-history",
+              "concepts/handoff-mechanism"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/multi-level-hierarchies",
+              "guides/adding-memory",
+              "guides/custom-handoff-tools",
+              "guides/message-forwarding",
+              "guides/functional-api"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Functions",
+            "pages": [
+              "api-reference/create-supervisor",
+              "api-reference/create-handoff-tool",
+              "api-reference/create-forward-message-tool"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api-reference/agent-name",
+              "api-reference/output-mode"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Create supervisor agents to orchestrate multiple specialized sub-agents",
+    "Tool-based agent handoff mechanism for seamless communication between agents",
+    "Flexible message history management with full_history and last_message output modes",
+    "Multi-level hierarchical agent systems (supervisors of supervisors)",
+    "Built-in support for short-term and long-term memory via LangGraph checkpointers and stores",
+    "Customizable handoff tools with custom names, descriptions, and arguments",
+    "Message forwarding tool to pass worker responses directly to output without paraphrasing",
+    "Inline agent name mode for non-OpenAI/Anthropic LLM providers",
+    "Support for both Graph API and Functional API agent workflows",
+    "Parallel tool call control for multi-agent handoffs"
+  ],
+  "publicApiSurface": [
+    "create_supervisor(agents, *, model, tools, prompt, response_format, pre_model_hook, post_model_hook, parallel_tool_calls, state_schema, context_schema, output_mode, add_handoff_messages, handoff_tool_prefix, add_handoff_back_messages, supervisor_name, include_agent_name)",
+    "create_handoff_tool(*, agent_name, name, description, add_handoff_messages)",
+    "create_forward_message_tool(supervisor_name)",
+    "OutputMode (Literal['full_history', 'last_message'])",
+    "AgentNameMode (Literal['inline'])",
+    "with_agent_name(model, agent_name_mode)",
+    "add_inline_agent_name(message)",
+    "remove_inline_agent_name(message)",
+    "METADATA_KEY_HANDOFF_DESTINATION",
+    "METADATA_KEY_IS_HANDOFF_BACK"
+  ]
+}
